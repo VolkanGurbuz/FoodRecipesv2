@@ -4,6 +4,7 @@ import android.arch.lifecycle.LiveData;
 import android.content.Context;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
+import android.util.Log;
 
 import com.codingwithmitch.foodrecipes.AppExecutors;
 import com.codingwithmitch.foodrecipes.models.Recipe;
@@ -20,6 +21,8 @@ import java.util.List;
 
 public class RecipeRepository {
 
+  private static final String TAG = "RecipeRepository";
+
   private static RecipeRepository instance;
   private RecipeDao recipeDao;
 
@@ -27,11 +30,10 @@ public class RecipeRepository {
     if (instance == null) {
       instance = new RecipeRepository(context);
     }
-
     return instance;
   }
 
-  public RecipeRepository(Context context) {
+  private RecipeRepository(Context context) {
     recipeDao = RecipeDatabase.getInstance(context).getRecipeDao();
   }
 
@@ -39,24 +41,42 @@ public class RecipeRepository {
       final String query, final int pageNumber) {
     return new NetworkBoundResource<List<Recipe>, RecipeSearchResponse>(
         AppExecutors.getInstance()) {
-      // look at the cache it will decide it is network request or not, and the nget the data update
-      // the cache
-      @Override
-      public void saveCallResult(@NonNull RecipeSearchResponse item) {}
 
-      // decide whether or net fetch the cache
+      @Override
+      public void saveCallResult(@NonNull RecipeSearchResponse item) {
+        if (item.getRecipes() != null) { // recipe list will be null if api key is expired
+          Recipe[] recipes = new Recipe[item.getRecipes().size()];
+
+          int index = 0;
+          for (long rowId :
+              recipeDao.insertRecipes((Recipe[]) (item.getRecipes().toArray(recipes)))) {
+            if (rowId == -1) { // conflict detected
+              Log.d(TAG, "saveCallResult: CONFLICT... This recipe is already in cache.");
+              // if already exists, I don't want to set the ingredients or timestamp b/c they will
+              // be erased
+              recipeDao.updateRecipe(
+                  recipes[index].getRecipe_id(),
+                  recipes[index].getTitle(),
+                  recipes[index].getPublisher(),
+                  recipes[index].getImage_url(),
+                  recipes[index].getSocial_rank());
+            }
+            index++;
+          }
+        }
+      }
+
       @Override
       public boolean shouldFetch(@Nullable List<Recipe> data) {
         return true; // always query the network since the queries can be anything
       }
 
-      // retrieving data from local cache call searchRecipes from db
       @NonNull
       @Override
       public LiveData<List<Recipe>> loadFromDb() {
         return recipeDao.searchRecipes(query, pageNumber);
       }
-      // creating retrofit call object and creating call from api
+
       @NonNull
       @Override
       public LiveData<ApiResponse<RecipeSearchResponse>> createCall() {
